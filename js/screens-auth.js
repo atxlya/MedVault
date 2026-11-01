@@ -38,8 +38,9 @@ Screens.auth.login = function () {
       '<div class="alert alert--warn" style="margin-top:18px">' + icon('alert', 17) +
         '<div><strong>Demo credentials.</strong> All accounts use password <span class="mono">demo123</span>. Prototype only.</div></div>' +
       '<div class="section-title" style="margin-top:26px">Emergency</div>' +
-      '<p class="small muted" style="margin-bottom:12px">For an unconscious patient who cannot provide history. Scoped to clinically relevant information and always logged.</p>' +
+      '<p class="small muted" style="margin-bottom:12px">For a patient who cannot provide history. Needs the one-time code from the patient’s Medical ID QR. Scoped to clinically relevant information, limited to 30 minutes and always logged.</p>' +
       '<button class="btn btn--danger btn--block" id="breakglass-btn">' + icon('alert', 17) + ' Break-glass access</button>' +
+      '<p class="tiny muted" style="margin-top:10px">Demo: sign in as the patient, open <strong>Medical ID</strong>, note the emergency code, then sign out and use it here.</p>' +
     '</div>' +
   '</div>';
 };
@@ -95,10 +96,10 @@ function bindAuth(root) {
   }));
 
   const bg = $('#breakglass-btn', root);
-  if (bg) bg.addEventListener('click', openBreakGlass);
+  if (bg) bg.addEventListener('click', () => openBreakGlass());
 }
 
-function openBreakGlass() {
+function openBreakGlass(prefillCode) {
   const body = '<div class="alert alert--danger" style="margin-bottom:16px">' + icon('alert', 18) +
     '<div><strong>Exceptional access.</strong> Break-glass is only for when a patient cannot provide consent and delay would risk harm. Every use is recorded, scoped and reviewed.</div></div>' +
     '<form id="bg-form" novalidate>' +
@@ -107,7 +108,7 @@ function openBreakGlass() {
       '<div class="field"><label for="bg-facility">Facility <span class="req">*</span></label><select class="select" id="bg-facility"><option value="">Select…</option>' +
         Store.state.facilities.map(f => '<option value="' + f.id + '">' + esc(f.name + ' — ' + f.city) + '</option>').join('') +
       '</select><div class="err hidden" id="e-bg-facility"></div></div>' +
-      '<div class="field"><label for="bg-patient">Patient MedVault ID <span class="req">*</span></label><input class="input mono" id="bg-patient" placeholder="MV-1001" /><div class="hint">Try MV-1001</div><div class="err hidden" id="e-bg-patient"></div></div>' +
+      '<div class="field"><label for="bg-patient">Emergency access code <span class="req">*</span></label><input class="input mono" id="bg-patient" placeholder="ABCDE-FGHJK" autocomplete="off" autocapitalize="characters" maxlength="80" value="' + esc(prefillCode ? EmergencyAccess.format(EmergencyAccess.normalize(prefillCode)) : '') + '" /><div class="hint">Scan the QR on the patient’s MedVault Medical ID, or type the code shown under it. Codes work once and expire after 10 minutes. A MedVault ID alone is not accepted.</div><div class="err hidden" id="e-bg-patient"></div></div>' +
       '<div class="field"><label for="bg-reason">Clinical justification <span class="req">*</span></label><textarea class="textarea" id="bg-reason" placeholder="Describe the emergency"></textarea><div class="err hidden" id="e-bg-reason"></div></div>' +
     '</form>';
 
@@ -134,22 +135,23 @@ function openBreakGlass() {
     if (!name) { showErr('#e-bg-name', 'Name required.'); bad = true; }
     if (!r) { showErr('#e-bg-role', 'Role required.'); bad = true; }
     if (!facId) { showErr('#e-bg-facility', 'Facility required.'); bad = true; }
-    if (!pid) { showErr('#e-bg-patient', 'Patient ID required.'); bad = true; }
+    if (!pid) { showErr('#e-bg-patient', 'Emergency code required.'); bad = true; }
     if (!reason || reason.length < 10) { showErr('#e-bg-reason', 'Provide a justification (10+ chars).'); bad = true; }
     if (bad) return;
 
-    const patient = Store.state.patients.find(p => p.medvaultId.toUpperCase() === pid);
-    if (!patient) {
-      showErr('#e-bg-patient', 'No record found for that ID.');
-      Toast.error('Patient not found', 'Check the MedVault ID.');
+    const check = EmergencyAccess.redeem(pid);
+    if (!check.ok) {
+      showErr('#e-bg-patient', check.message);
+      Toast.error('Access not granted', check.message);
       return;
     }
+    const patient = check.patient;
 
     const fac = Store.facility(facId);
     const ev = {
       id: uid('bg'), ts: nowISO(), patientId: patient.id, responderName: name,
       responderRole: r, facilityId: facId, facilityName: fac.name + ', ' + fac.city,
-      reason: reason, scopesAccessed: ['bloodGroup', 'allergies', 'conditions', 'medications', 'emergencyContact'],
+      reason: reason, codeId: check.token.id, scopesAccessed: ['bloodGroup', 'allergies', 'conditions', 'medications', 'emergencyContact'],
       status: 'pending', reviewedBy: null, reviewedAt: null, reviewNote: ''
     };
     Store.state.breakGlass.unshift(ev);
@@ -159,8 +161,9 @@ function openBreakGlass() {
 
     Sheet.close();
     Toast.warn('Emergency access granted', 'This access is logged and will be reviewed.');
-    Session.start({ id: 'emergency-' + ev.id, role: 'emergency', name: name }, { breakGlass: true, eventId: ev.id, patientId: patient.id, facilityName: ev.facilityName });
+    Session.start({ id: 'emergency-' + ev.id, role: 'emergency', name: name }, { breakGlass: true, eventId: ev.id, patientId: patient.id, facilityName: ev.facilityName, responderName: name, expiresAt: new Date(Date.now() + EmergencyAccess.SESSION_MS).toISOString() });
     App.tab = 'emergency';
+    App.subScreen = null;
     App.render();
   });
 }

@@ -73,6 +73,7 @@ const App = {
   },
 
   render() {
+    if (this.expireEmergencySession()) return;
     if (!Session.data) { this.renderAuth(); return; }
     this.renderShell();
   },
@@ -132,6 +133,7 @@ const App = {
       this.subScreen = tab;
     }
     if (tab !== 'home') this.aiSummary = null;
+    if (tab !== 'medical-id') this.medicalIdExpired = null;
     this.filters = {};
     this.render();
   },
@@ -335,7 +337,7 @@ const App = {
     $$('[data-menu="reset"]').forEach(b => b.addEventListener('click', async () => {
       Sheet.close();
       const ok = await Sheet.confirm({ title: 'Reset demo data?', message: 'This restores the original sample patients, records, consents and audit events.', okLabel: 'Reset', danger: true });
-      if (ok) { Store.reset(); Session.clear(); Toast.success('Demo reset', 'Restored to the seeded state.'); this.render(); }
+      if (ok) { Store.reset(); FileStore.clear(); Session.clear(); Toast.success('Demo reset', 'Restored to the seeded state.'); this.render(); }
     }));
   },
 
@@ -359,10 +361,23 @@ const App = {
     }));
   },
 
+  /* Break-glass sessions end automatically after 30 minutes. */
+  expireEmergencySession() {
+    if (!EmergencyAccess.sessionExpired(Session.data)) return false;
+    audit('BREAK_GLASS_SESSION_EXPIRED', { patientId: Session.data.patientId, detail: 'Emergency session ended after 30 minutes', severity: 'warning' });
+    Session.clear();
+    this.tab = 'home'; this.subScreen = null; this.assistantState = null;
+    Sheet.close(); Fullscreen.close();
+    this.renderAuth();
+    Toast.warn('Emergency session ended', 'Break-glass sessions last 30 minutes. A new code is needed to continue.');
+    return true;
+  },
+
   logout() {
     audit('USER_LOGOUT', { detail: 'Session ended' });
     Session.clear();
     this.tab = 'home';
+    this.subScreen = null;
     this.actingPatientId = null;
     this.wizard = null;
     this.aiSummary = null;
@@ -375,6 +390,17 @@ const App = {
     if (Session.restore()) this.render();
     else this.renderAuth();
     if (typeof ReminderEngine !== 'undefined') ReminderEngine.start();
+    setInterval(() => this.expireEmergencySession(), 15000);
+    // A scanned emergency QR opens the app at #emergency=CODE.
+    const handleLink = () => {
+      const code = /(?:^|[#&])emergency=([A-Za-z0-9-]+)/.exec(location.hash);
+      if (!code) return;
+      history.replaceState(null, '', location.pathname + location.search);
+      if (!Session.data) openBreakGlass(code[1]);
+      else Toast.info('Emergency code ignored', 'Sign out first to use an emergency code on this device.');
+    };
+    handleLink();
+    window.addEventListener('hashchange', handleLink);
   }
 };
 

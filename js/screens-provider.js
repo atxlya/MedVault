@@ -194,8 +194,9 @@ Screens.provider.assisted = function () {
         '<div>Linking to <strong>' + esc(w.patient.name) + '</strong> · ' + esc(fac ? fac.name : '') + '</div></div>' +
       '<div class="dropzone" id="wz-dz" style="margin-bottom:16px">' + icon('upload', 28) +
         '<div style="font-weight:600;margin-top:11px;font-size:14.5px">Choose a file</div>' +
-        '<input type="file" id="wz-file" style="display:none" /></div>' +
-      '<div class="section-title">Or use a sample</div>' +
+        '<div class="small muted" style="margin-top:4px">Photos are read with OCR · PDFs are saved without OCR · 10 MB max</div>' +
+        '<input type="file" id="wz-file" style="display:none" accept=".jpg,.jpeg,.png,.webp,.pdf,.doc,.docx,image/*" /></div>' +
+      '<div class="section-title">Or use a sample <span class="muted" style="font-weight:500;text-transform:none;letter-spacing:0">(simulated extraction)</span></div>' +
       '<div style="display:flex;flex-direction:column;gap:9px">' +
         OCR.samples.map((s, i) => '<button class="btn" data-wsample="' + i + '" style="justify-content:flex-start;text-align:left;padding:12px 14px">' +
           '<span class="record-ico record-ico--' + ((RECORD_TYPES[s.type] || {}).cls || 'prescription') + '" style="width:34px;height:34px">' + icon('file', 17) + '</span>' +
@@ -217,22 +218,9 @@ Screens.provider.assisted = function () {
   }
 
   if (w.step === 5) {
-    const ex = w.extracted;
     return '<div class="screen">' +
       '<div class="steps">' + stepsBar(5) + '</div>' +
-      '<div class="alert alert--success" style="margin-bottom:16px">' + icon('check', 18) +
-        '<div><strong>Classification complete.</strong> Identified as <strong>' + esc((RECORD_TYPES[w.type] || {}).label || w.type) + '</strong> with ' + Object.keys(ex).length + ' fields extracted.</div></div>' +
-      '<div class="card" style="margin-bottom:16px"><div class="card__body" style="padding:0">' +
-        '<table style="width:100%;font-size:13.5px;border-collapse:collapse">' +
-          (ex.facility ? rowKV('Facility', ex.facility) : '') +
-          (ex.doctor ? rowKV('Clinician', ex.doctor) : '') +
-          (ex.date ? rowKV('Date', fmtDate(ex.date)) : '') +
-          (ex.diagnosis ? rowKV('Diagnosis', ex.diagnosis) : '') +
-          ((ex.medications || []).length ? '<tr><td style="padding:11px 15px;border-bottom:1px solid var(--border);color:var(--muted);font-weight:500;width:100px;font-size:12px;text-transform:uppercase;letter-spacing:.04em">Meds</td><td style="padding:11px 15px;border-bottom:1px solid var(--border);font-weight:600"><ul style="margin:0;padding-left:18px">' + ex.medications.map(m => '<li>' + esc(m) + '</li>').join('') + '</ul></td></tr>' : '') +
-          ((ex.results || ex.vitals) ? rowKV('Results', ex.results || ex.vitals) : '') +
-          (ex.advice ? rowKV('Advice', ex.advice) : '') +
-        '</table>' +
-      '</div></div>' +
+      OCRReview.fields('w5r', w.ocr, { noTitle: true, facility: fac ? fac.name + ', ' + fac.city : '', doctor: (App.currentProvider() || {}).name || '' }) +
       '<div class="section-title">Notify</div>' +
       '<div style="display:flex;flex-direction:column;gap:9px;margin-bottom:16px">' +
         '<label class="check is-on"><input type="checkbox" id="w5-patient" checked />' +
@@ -242,7 +230,7 @@ Screens.provider.assisted = function () {
       '</div>' +
       '<div style="display:flex;gap:10px">' +
         '<button class="btn" data-act="wizard-back" style="flex:1">Back</button>' +
-        '<button class="btn btn--primary" id="w5-confirm" style="flex:2">Save & notify</button>' +
+        '<button class="btn btn--primary" id="w5-confirm" style="flex:2" disabled>Save & notify</button>' +
       '</div>' +
     '</div>';
   }
@@ -571,17 +559,23 @@ function bindProviderAssisted(root) {
   if (dz) {
     const fi = $('#wz-file', root);
     dz.addEventListener('click', () => fi.click());
-    fi.addEventListener('change', () => { if (fi.files[0]) startWizardOcr(fi.files[0].name, fi.files[0].size); });
+    fi.addEventListener('change', () => {
+      const f = fi.files[0];
+      if (!f) return;
+      if (f.size > FileStore.MAX_BYTES) { Toast.error('File too large', 'Choose a file of 10 MB or less.'); fi.value = ''; return; }
+      startWizardOcr({ file: f }, f.name);
+    });
   }
   $$('[data-wsample]', root).forEach(b => b.addEventListener('click', () => {
-    const s = OCR.samples[+b.dataset.wsample]; startWizardOcr(s.fileName, s.size);
+    startWizardOcr({ sample: +b.dataset.wsample }, OCR.samples[+b.dataset.wsample].fileName);
   }));
+  if (App.wizard && App.wizard.step === 5 && App.wizard.ocr) OCRReview.bind('w5r', root, $('#w5-confirm', root), App.wizard.ocr);
 
-  function startWizardOcr(fileName, size) {
+  function startWizardOcr(source, fileName) {
     const w = App.wizard;
     w.step = 4; w.fileName = fileName; w.progress = 0; w.stageText = 'Starting…';
     App.renderBody();
-    OCR.simulate(fileName, size, (p, s) => {
+    OCR.process(source, (p, s) => {
       if (!App.wizard) return;
       App.wizard.progress = p; App.wizard.stageText = s;
       const bar = $('#wz-bar'), st = $('#wz-stage');
@@ -590,6 +584,7 @@ function bindProviderAssisted(root) {
     }).then(res => {
       if (!App.wizard) return;
       App.wizard.step = 5;
+      App.wizard.ocr = res;
       App.wizard.extracted = res.extracted;
       App.wizard.raw = res.raw;
       App.wizard.type = res.type;
@@ -601,7 +596,8 @@ function bindProviderAssisted(root) {
   const w5 = $('#w5-confirm', root);
   if (w5) w5.addEventListener('click', () => {
     const w = App.wizard;
-    const ex = w.extracted;
+    const ex = OCRReview.read('w5r', root);
+    w.type = ex.type || w.type;
     const pv = App.currentProvider();
     const fac = pv ? Store.facility(pv.facilityId) : null;
     const notifyPatient = $('#w5-patient', root).checked;
@@ -613,13 +609,15 @@ function bindProviderAssisted(root) {
       date: ex.date || todayISO(),
       facilityId: pv ? pv.facilityId : null,
       facilityName: ex.facility || (fac ? fac.name + ', ' + fac.city : 'Unknown facility'),
+      extraction: { method: w.ocr && w.ocr.source === 'sample' ? 'sample' : w.ocr && w.ocr.ok ? 'ocr' : 'manual', confidence: w.ocr ? w.ocr.confidence : null, reviewedAt: nowISO() },
       doctor: ex.doctor || (pv ? pv.name : ''),
       source: 'provider-upload', fileName: w.fileName, size: w.size,
       summary: ex.diagnosis || 'Record linked via assisted workflow.',
-      extracted: { diagnosis: ex.diagnosis || '', medications: ex.medications || [], results: ex.results || ex.vitals || '', advice: ex.advice || '' },
+      extracted: { diagnosis: ex.diagnosis || '', medications: ex.medications || [], results: ex.results || '', vitals: ex.vitals || '', advice: ex.advice || '' },
       tags: ['assisted-linking'], createdAt: nowISO()
     };
     Store.state.records.unshift(rec);
+    if (w.ocr && w.ocr.file) attachOriginalFile(rec, w.ocr.file);
     if (notifyPatient) notify(w.patient.id, 'New record added', rec.title + ' was uploaded by ' + (fac ? fac.name : 'a facility') + '.', 'record');
     Store.save();
     audit('RECORD_UPLOADED', { patientId: w.patient.id, detail: 'Assisted linking · ' + rec.title });
@@ -699,7 +697,8 @@ function openProviderUpload() {
     if (step === 1) {
       b.innerHTML = '<div class="steps"><div class="step is-active">1 Select</div><div class="step">2 Extract</div><div class="step">3 Review</div></div>' +
         '<div class="dropzone" id="pv-dz" style="margin-bottom:14px">' + icon('upload', 26) +
-          '<div style="font-weight:600;margin-top:10px">Choose a file</div><input type="file" id="pv-fi" style="display:none" /></div>' +
+          '<div style="font-weight:600;margin-top:10px">Choose a file</div><div class="small muted" style="margin-top:4px">Photos are read with OCR · PDFs are saved without OCR · 10 MB max</div><input type="file" id="pv-fi" style="display:none" accept=".jpg,.jpeg,.png,.webp,.pdf,.doc,.docx,image/*" /></div>' +
+        '<div class="section-title">Or use a sample <span class="muted" style="font-weight:500;text-transform:none;letter-spacing:0">(simulated extraction)</span></div>' +
         '<div style="display:flex;flex-direction:column;gap:9px">' +
           OCR.samples.map((s, i) => '<button class="btn" data-ps="' + i + '" style="justify-content:flex-start;text-align:left;padding:12px 14px">' +
             '<span class="record-ico record-ico--' + ((RECORD_TYPES[s.type] || {}).cls || 'prescription') + '" style="width:32px;height:32px">' + icon('file', 16) + '</span>' +
@@ -707,46 +706,43 @@ function openProviderUpload() {
         '</div>';
       const dz = $('#pv-dz', b), fi = $('#pv-fi', b);
       dz.addEventListener('click', () => fi.click());
-      fi.addEventListener('change', () => { if (fi.files[0]) run(fi.files[0].name, fi.files[0].size); });
-      $$('[data-ps]', b).forEach(btn => btn.addEventListener('click', () => { const s = OCR.samples[+btn.dataset.ps]; run(s.fileName, s.size); }));
+      fi.addEventListener('change', () => {
+        const f = fi.files[0];
+        if (!f) return;
+        if (f.size > FileStore.MAX_BYTES) { Toast.error('File too large', 'Choose a file of 10 MB or less.'); fi.value = ''; return; }
+        run({ file: f });
+      });
+      $$('[data-ps]', b).forEach(btn => btn.addEventListener('click', () => run({ sample: +btn.dataset.ps })));
     } else if (step === 2) {
       b.innerHTML = '<div class="steps"><div class="step is-done">1 Select</div><div class="step is-active">2 Extract</div><div class="step">3 Review</div></div>' +
         '<div style="text-align:center;padding:26px 0"><div class="spinner spinner--lg" style="margin:0 auto 18px"></div>' +
         '<div style="font-weight:600" id="pv-stage">Processing…</div>' +
         '<div class="progress" style="margin-top:20px;max-width:280px;margin-left:auto;margin-right:auto"><div class="progress__bar" id="pv-bar" style="width:0%"></div></div></div>';
     } else {
-      const ex = ocr.extracted;
       b.innerHTML = '<div class="steps"><div class="step is-done">1 Select</div><div class="step is-done">2 Extract</div><div class="step is-active">3 Review</div></div>' +
-        '<div class="alert alert--success" style="margin-bottom:14px">' + icon('check', 18) + '<div><strong>Extracted.</strong> Review before saving.</div></div>' +
-        '<div class="field"><label for="pv-title">Title</label><input class="input" id="pv-title" value="' + esc(ocr.sample.label) + '" /></div>' +
-        '<div class="field"><label for="pv-type">Type</label><select class="select" id="pv-type">' +
-          Object.keys(RECORD_TYPES).map(t => '<option value="' + t + '"' + (ocr.type === t ? ' selected' : '') + '>' + esc(RECORD_TYPES[t].label) + '</option>').join('') +
-        '</select></div>' +
-        '<div class="field"><label for="pv-date">Date</label><input class="input" type="date" id="pv-date" value="' + esc(ex.date || todayISO()) + '" /></div>' +
-        '<div class="field"><label for="pv-facility">Facility</label><input class="input" id="pv-facility" value="' + esc(ex.facility || '') + '" /></div>' +
-        '<div class="field"><label for="pv-dx">Diagnosis</label><input class="input" id="pv-dx" value="' + esc(ex.diagnosis || '') + '" /></div>' +
-        '<div class="field"><label for="pv-meds">Medications (one per line)</label><textarea class="textarea" id="pv-meds">' + esc((ex.medications || []).join('\n')) + '</textarea></div>' +
-        '<div class="field"><label for="pv-res">Results</label><input class="input" id="pv-res" value="' + esc(ex.results || ex.vitals || '') + '" /></div>' +
-        '<div class="field"><label for="pv-adv">Advice</label><textarea class="textarea" id="pv-adv">' + esc(ex.advice || '') + '</textarea></div>' +
+        OCRReview.fields('pv', ocr) +
         '<button class="btn btn--primary btn--block" id="pv-save">' + icon('check', 17) + ' Save record</button>';
+      OCRReview.bind('pv', b, $('#pv-save', b), ocr);
       $('#pv-save').addEventListener('click', () => {
-        const meds = $('#pv-meds').value.split('\n').map(s => s.trim()).filter(Boolean);
+        const v = OCRReview.read('pv', b);
         const pv = App.currentProvider();
         const fac = pv ? Store.facility(pv.facilityId) : null;
         const rec = {
-          id: uid('r'), patientId: pid, type: $('#pv-type').value,
-          title: $('#pv-title').value.trim() || 'Untitled',
-          date: $('#pv-date').value || todayISO(),
+          id: uid('r'), patientId: pid, type: v.type || 'consultation-note',
+          title: v.title || 'Untitled',
+          date: v.date || todayISO(),
           facilityId: pv ? pv.facilityId : null,
-          facilityName: $('#pv-facility').value.trim() || (fac ? fac.name + ', ' + fac.city : ''),
-          doctor: pv ? pv.name : '',
+          facilityName: v.facility || (fac ? fac.name + ', ' + fac.city : ''),
+          doctor: v.doctor || (pv ? pv.name : ''),
           source: 'provider-upload', fileName: ocr.fileName, size: ocr.size,
-          summary: $('#pv-dx').value.trim() || 'Uploaded by provider.',
-          extracted: { diagnosis: $('#pv-dx').value.trim(), medications: meds, results: $('#pv-res').value.trim(), advice: $('#pv-adv').value.trim() },
+          summary: v.diagnosis || 'Uploaded by provider.',
+          extracted: { diagnosis: v.diagnosis, medications: v.medications, results: v.results, vitals: v.vitals, advice: v.advice },
+          extraction: { method: ocr.source === 'sample' ? 'sample' : ocr.ok ? 'ocr' : 'manual', confidence: ocr.confidence, reviewedAt: nowISO() },
           tags: ['provider-upload'], createdAt: nowISO()
         };
         Store.state.records.unshift(rec);
         Store.save();
+        if (ocr.file) attachOriginalFile(rec, ocr.file);
         notify(pid, 'New record added', rec.title + ' was uploaded by ' + (fac ? fac.name : 'your provider') + '.', 'record');
         audit('RECORD_UPLOADED', { patientId: pid, detail: 'Uploaded ' + rec.title });
         Sheet.close();
@@ -756,9 +752,9 @@ function openProviderUpload() {
     }
   };
 
-  function run(fileName, size) {
+  function run(source) {
     step = 2; renderBody();
-    OCR.simulate(fileName, size, (p, s) => {
+    OCR.process(source, (p, s) => {
       const bar = $('#pv-bar'), st = $('#pv-stage');
       if (bar) bar.style.width = p + '%';
       if (st) st.textContent = s;

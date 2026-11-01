@@ -18,3 +18,10 @@ build/
 # Local env
 .env
 .env.local
+
+# Generated video/brag output folders
+brag-output-*/
+
+# Local tool config and internal documents
+.claude/
+docs/MedVault-Project-Report.md

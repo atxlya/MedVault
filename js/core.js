@@ -2,7 +2,7 @@
    core.js — shared utilities and icon set
    Exposes globals: $, $$, esc, uid, nowISO, fmtDate, fmtDateTime,
    timeAgo, age, initials, byDateDesc, daysFromNow, todayISO,
-   debounce, qrMatrix, qrSVG, ICONS, icon
+   debounce, qrSVG, ICONS, icon
    ============================================================ */
 
 const $ = (s, c) => (c || document).querySelector(s);
@@ -63,36 +63,18 @@ function debounce(fn, ms) {
   };
 }
 
-/* Deterministic pseudo-QR matrix (visual representation for the prototype) */
-function qrMatrix(text, size) {
-  size = size || 25;
-  let h = 2166136261;
-  for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619); }
-  const rnd = () => { h ^= h << 13; h ^= h >>> 17; h ^= h << 5; return ((h >>> 0) % 100000) / 100000; };
-  const m = Array.from({ length: size }, () => new Array(size).fill(0));
-  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) m[y][x] = rnd() > 0.48 ? 1 : 0;
-  const finder = (ox, oy) => {
-    for (let y = -1; y < 8; y++) for (let x = -1; x < 8; x++) {
-      const yy = oy + y, xx = ox + x;
-      if (yy < 0 || xx < 0 || yy >= size || xx >= size) continue;
-      if (x === -1 || x === 7 || y === -1 || y === 7) { m[yy][xx] = 0; continue; }
-      const edge = x === 0 || x === 6 || y === 0 || y === 6;
-      const core = x >= 2 && x <= 4 && y >= 2 && y <= 4;
-      m[yy][xx] = (edge || core) ? 1 : 0;
-    }
-  };
-  finder(0, 0); finder(size - 7, 0); finder(0, size - 7);
-  for (let i = 8; i < size - 8; i++) { m[6][i] = i % 2 === 0 ? 1 : 0; m[i][6] = i % 2 === 0 ? 1 : 0; }
-  return m;
-}
+/* Real, scannable QR code (byte mode, error correction M) drawn as SVG.
+   Uses the vendored qrcode-generator library in js/vendor/. */
 function qrSVG(text, px) {
-  px = px || 128;
-  const size = 25, m = qrMatrix(text, size), cell = px / size;
-  let rects = '';
-  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
-    if (m[y][x]) rects += `<rect x="${(x * cell).toFixed(2)}" y="${(y * cell).toFixed(2)}" width="${cell.toFixed(2)}" height="${cell.toFixed(2)}"/>`;
-  }
-  return `<svg width="${px}" height="${px}" viewBox="0 0 ${px} ${px}" role="img" aria-label="Medical ID QR code"><rect width="${px}" height="${px}" fill="#fff"/><g fill="#0f172a">${rects}</g></svg>`;
+  px = px || 168;
+  if (typeof qrcode !== 'function') return '<div class="small muted">QR library unavailable</div>';
+  const qr = qrcode(0, 'M');
+  qr.addData(String(text), 'Byte');
+  qr.make();
+  const n = qr.getModuleCount(), quiet = 4, total = n + quiet * 2;
+  let d = '';
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (qr.isDark(y, x)) d += 'M' + (x + quiet) + ' ' + (y + quiet) + 'h1v1h-1z';
+  return '<svg xmlns="http://www.w3.org/2000/svg" width="' + px + '" height="' + px + '" viewBox="0 0 ' + total + ' ' + total + '" shape-rendering="crispEdges" role="img" aria-label="Emergency access QR code"><rect width="' + total + '" height="' + total + '" fill="#fff"/><path fill="#0f172a" d="' + d + '"/></svg>';
 }
 
 const ICONS = {

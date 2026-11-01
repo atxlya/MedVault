@@ -11,7 +11,7 @@ Screens.emergency.emergency = function () {
 
   return '<div class="screen">' +
     '<div class="alert alert--danger" style="margin-bottom:16px">' + icon('alert', 20) +
-      '<div><strong>Break-glass session.</strong> This access is scoped, time-limited and recorded for review.</div></div>' +
+      '<div><strong>Break-glass session.</strong> This access is scoped, ends at ' + esc(new Date(EmergencyAccess.sessionEndsAt(Session.data)).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })) + ' (30 minutes) and is recorded for review.</div></div>' +
 
     '<div class="card" style="border-color:#fecaca;border-width:2px;margin-bottom:14px"><div class="card__body">' +
       '<div style="display:flex;gap:14px;align-items:center;margin-bottom:14px">' +
@@ -98,11 +98,12 @@ Screens.emergency.profile = function () {
       '<dl class="kv">' +
         '<div><dt>Facility</dt><dd>' + esc(Session.data.facilityName || '—') + '</dd></div>' +
         '<div><dt>Session started</dt><dd>' + esc(fmtDateTime(Session.data.loginAt)) + '</dd></div>' +
+        '<div><dt>Session ends</dt><dd>' + esc(fmtDateTime(new Date(EmergencyAccess.sessionEndsAt(Session.data)).toISOString())) + '</dd></div>' +
         '<div><dt>Patient ID</dt><dd class="mono">' + esc((Store.patient(Session.data.patientId) || {}).medvaultId || '—') + '</dd></div>' +
       '</dl>' +
     '</div></div>' +
     '<div class="alert alert--warn">' + icon('alert', 18) +
-      '<div>This session is time-limited and scoped to clinically relevant information only. Full history is not exposed. Do not share this information outside the patient\'s care.</div></div>' +
+      '<div>This session ends automatically after 30 minutes and is scoped to clinically relevant information only. Full history is not exposed. Do not share this information outside the patient\'s care.</div></div>' +
     '<button class="btn btn--danger btn--block" data-act="logout" style="margin-top:16px">' + icon('logout', 16) + ' End session</button>' +
   '</div>';
 };

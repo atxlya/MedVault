@@ -2,6 +2,38 @@
    reminders.js — patient-specific appointment, checkup and medicine alerts
    ============================================================ */
 
+/* Device (system) notifications. They only fire while MedVault is open in a
+   tab: there is no service worker or push server. When they are unsupported,
+   blocked or turned off, reminders fall back to an in-app banner plus the
+   bell menu. */
+const DeviceNotify = {
+  PREF_KEY: 'medvault.deviceNotifications.v1',
+  supported() { return typeof window !== 'undefined' && 'Notification' in window && window.isSecureContext !== false; },
+  permission() { return this.supported() ? Notification.permission : 'unsupported'; },
+  wanted() { try { return localStorage.getItem(this.PREF_KEY) === 'on'; } catch (_) { return false; } },
+  setWanted(on) { try { localStorage.setItem(this.PREF_KEY, on ? 'on' : 'off'); } catch (_) {} },
+  active() { return this.permission() === 'granted' && this.wanted(); },
+  /* 'on' | 'off' | 'default' | 'denied' | 'unsupported' */
+  state() {
+    const p = this.permission();
+    if (p === 'granted') return this.wanted() ? 'on' : 'off';
+    return p;
+  },
+  async enable() {
+    if (!this.supported()) return 'unsupported';
+    let p = Notification.permission;
+    if (p === 'default') { try { p = await Notification.requestPermission(); } catch (_) { p = Notification.permission; } }
+    if (p === 'granted') this.setWanted(true);
+    return p;
+  },
+  /* Returns true only if the system notification was actually created. */
+  show(title, body, tag) {
+    if (!this.active()) return false;
+    try { new Notification(title, { body, tag, renotify: false }); return true; }
+    catch (_) { return false; } // e.g. Android Chrome requires a service worker
+  }
+};
+
 const ReminderEngine = {
   timer: null,
   localDay(date) {
@@ -25,6 +57,10 @@ const ReminderEngine = {
       notify(pid, title, body, 'reminder');
       Store.state.notifications[0].reminderKey = key;
       Store.save(); added = true;
+      const shown = DeviceNotify.show(title, body, key);
+      Store.state.notifications[0].delivery = shown ? 'device+in-app' : 'in-app';
+      Store.save();
+      if (!shown) Toast.info(title, body); // in-app fallback
     };
 
     reminders.forEach(r => {
@@ -77,6 +113,8 @@ Screens.patient.reminders = function () {
 
   return '<div class="screen reminders-screen">' +
     '<section class="reminders-hero"><div class="reminders-hero__icon">' + icon('bell', 21) + '</div><div><h1>Reminders</h1><p>Appointments, checkups and your chosen medicine schedule.</p></div></section>' +
+    '<div class="section-title">Device notifications</div>' +
+    notifyCardHTML() +
     '<div class="section-title">Checkup follow-up</div>' +
     '<section class="card reminder-checkup"><div class="card__body">' +
       (lastVisit ? '<div class="reminder-checkup__row"><div><div class="reminder-checkup__title">' + (due ? 'A gentle check-in' : 'Last recorded visit') + '</div><div class="small muted">' + esc(lastVisit.title) + ' · ' + esc(fmtDate(lastVisit.date)) + '</div></div><span class="badge ' + (due ? 'badge--amber' : 'badge--teal') + '">' + (due ? elapsed + ' days ago' : elapsed + ' days ago') + '</span></div>' +
@@ -100,13 +138,48 @@ Screens.patient.reminders = function () {
       '<button class="btn btn--primary btn--block" type="submit">' + icon('plus', 17) + ' Add daily reminder</button>' +
     '</div></form>' : (!meds.length ? '<div class="alert alert--info">' + icon('records', 18) + '<div>No medicines are listed in this patient profile. Add or update medicines through the existing medical-record workflow first.</div></div>' : '')) +
     (medicines.length ? '<div class="list reminder-list">' + medicines.map(r => '<div class="list-item reminder-list__item"><span class="list-item__ico reminder-icon--medicine">' + icon('activity', 19) + '</span><div class="list-item__body"><div class="list-item__title">' + esc(r.label) + '</div><div class="list-item__sub">Every day · ' + esc(r.time) + '</div></div>' + (canManage ? '<button class="btn btn--ghost btn--icon btn--sm" type="button" data-remove-reminder="' + esc(r.id) + '" aria-label="Remove ' + esc(r.label) + ' reminder">' + icon('x', 17) + '</button>' : '') + '</div>').join('') + '</div>' : '') +
-    '<p class="reminders-note">Alerts are added to your MedVault notifications while the app is open. Follow-up timing and medicine schedules should come from your care team.</p>' +
+    '<p class="reminders-note">Reminders are checked once a minute while MedVault is open in a tab. They are not delivered when the app is closed. Follow-up timing and medicine schedules should come from your care team.</p>' +
   '</div>';
 };
+
+function notifyCardHTML() {
+  const st = DeviceNotify.state();
+  const text = {
+    on: ['On', 'badge--teal', 'Reminders also appear as notifications on this device while MedVault is open.'],
+    off: ['Off', 'badge--gray', 'Allowed by your browser but turned off here. Reminders show inside MedVault only.'],
+    default: ['Off', 'badge--gray', 'Turn on to get reminders as device notifications while MedVault is open. Your browser will ask for permission.'],
+    denied: ['Blocked', 'badge--amber', 'Notifications are blocked in your browser settings. Reminders still appear as a banner and in the bell menu inside MedVault.'],
+    unsupported: ['Unavailable', 'badge--gray', 'This browser cannot show device notifications here. Reminders still appear as a banner and in the bell menu inside MedVault.']
+  }[st];
+  const actions = st === 'default' || st === 'off' ? '<button class="btn btn--primary btn--sm" type="button" data-notify="enable">' + icon('bell', 15) + ' Turn on</button>'
+    : st === 'on' ? '<button class="btn btn--sm" type="button" data-notify="test">Send test</button><button class="btn btn--ghost btn--sm" type="button" data-notify="disable">Turn off</button>'
+    : '';
+  return '<section class="card notify-card" id="notify-card"><div class="card__body">' +
+    '<div class="notify-card__row"><strong>Notifications on this device</strong><span class="badge ' + text[1] + '" id="notify-state">' + text[0] + '</span></div>' +
+    '<p class="small muted" style="margin-top:8px">' + text[2] + '</p>' +
+    (actions ? '<div class="notify-card__actions">' + actions + '</div>' : '') +
+  '</div></section>';
+}
 
 function bindReminders(root) {
   const pid = App.activePatientId();
   const p = Store.patient(pid);
+  $$('[data-notify]', root).forEach(b => b.addEventListener('click', async () => {
+    const a = b.dataset.notify;
+    if (a === 'enable') {
+      const res = await DeviceNotify.enable();
+      if (res === 'granted') Toast.success('Notifications on', 'Reminders will also appear as device notifications while MedVault is open.');
+      else if (res === 'denied') Toast.warn('Notifications blocked', 'Reminders will appear inside MedVault instead.');
+      else if (res === 'unsupported') Toast.warn('Not available', 'Reminders will appear inside MedVault instead.');
+      else Toast.info('Not turned on', 'Reminders will appear inside MedVault.');
+    }
+    if (a === 'disable') { DeviceNotify.setWanted(false); Toast.info('Notifications off', 'Reminders will appear inside MedVault only.'); }
+    if (a === 'test') {
+      if (DeviceNotify.show('MedVault test', 'Device notifications are working.', 'medvault-test')) Toast.success('Test sent', 'Check your device notifications.');
+      else Toast.warn('Could not show a device notification', 'Reminders will appear inside MedVault instead.');
+    }
+    App.renderBody();
+  }));
   if (App.role() !== 'patient') return;
   const interval = $('#checkup-interval', root);
   if (interval) interval.addEventListener('change', () => {

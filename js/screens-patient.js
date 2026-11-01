@@ -408,7 +408,13 @@ Screens.patient.audit = function () {
 Screens.patient['medical-id'] = function () {
   const p = Store.patient(App.activePatientId());
   if (!p) return '<div class="screen">' + emptyState('No patient', '') + '</div>';
-  const qrData = 'MEDVAULT:' + p.medvaultId + '|ABHA:' + p.abhaId + '|NAME:' + p.name;
+  let tok = EmergencyAccess.current(p.id);
+  if (!tok && App.medicalIdExpired !== p.id) tok = EmergencyAccess.issue(p.id);
+  const qrBlock = tok
+    ? '<div class="mid__qr">' + qrSVG(EmergencyAccess.payload(tok), 176) + '</div>' +
+      '<div class="mid__code"><span class="mid__k">Emergency code</span><span class="mono" id="em-code">' + esc(EmergencyAccess.format(tok.code)) + '</span>' +
+      '<span class="mid__timer" id="em-code-timer" data-expires="' + esc(tok.expiresAt) + '"></span></div>'
+    : '<div class="mid__qr mid__qr--expired">' + icon('lock', 28) + '<div>Code expired</div></div>';
   return '<div class="screen">' +
     '<div class="mid" style="margin-bottom:16px">' +
       '<div class="mid__head"><div class="mid__brand">' + icon('shield', 18) + ' MedVault</div><span class="mid__tag">Medical ID</span></div>' +
@@ -423,8 +429,12 @@ Screens.patient['medical-id'] = function () {
         '<div><div class="mid__k">Date of birth</div><div class="mid__v">' + esc(fmtDate(p.dob)) + '</div></div>' +
         '<div><div class="mid__k">Facilities</div><div class="mid__v">' + p.linkedFacilities.length + ' linked</div></div>' +
       '</div>' +
-      '<div style="text-align:center"><div class="mid__qr">' + qrSVG(qrData, 168) + '</div></div>' +
+      '<div style="text-align:center">' + qrBlock + '</div>' +
     '</div>' +
+    '<div class="alert alert--info" style="margin-bottom:12px">' + icon('shield', 18) +
+      '<div>Emergency responders scan this QR or type the code in <strong>Break-glass access</strong>. Each code works once and expires after 10 minutes. The QR holds only the code — not your name, MedVault ID or ABHA number.</div></div>' +
+    '<button class="btn btn--block" data-act="new-code" style="margin-bottom:10px">' + icon('refresh', 16) + ' ' + (tok ? 'Replace with a new code' : 'Generate a new code') + '</button>' +
+    '<p class="tiny muted" style="margin:0 0 16px;line-height:1.5">Prototype: codes are checked only in this browser, so scanning on another phone opens MedVault there but the code will not be found.</p>' +
 
     '<div class="row" style="gap:10px;margin-bottom:16px">' +
       '<button class="btn" data-act="copy-id" style="flex:1">' + icon('copy', 16) + ' Copy ID</button>' +
@@ -665,9 +675,28 @@ function bindAudit(root) {
 }
 
 function bindMedicalId(root) {
+  if (App._midTimer) clearInterval(App._midTimer);
+  const timer = $('#em-code-timer', root);
+  if (timer) {
+    const pid = App.activePatientId();
+    const tick = () => {
+      const el = document.getElementById('em-code-timer');
+      if (!el) { clearInterval(App._midTimer); App._midTimer = null; return; }
+      const left = Date.parse(el.dataset.expires) - Date.now();
+      if (left <= 0 || !EmergencyAccess.current(pid)) {
+        clearInterval(App._midTimer); App._midTimer = null;
+        App.medicalIdExpired = pid; App.renderBody(); return;
+      }
+      const m = Math.floor(left / 60000), sec = Math.floor(left / 1000) % 60;
+      el.textContent = 'expires in ' + m + ':' + String(sec).padStart(2, '0');
+    };
+    tick();
+    App._midTimer = setInterval(tick, 1000);
+  }
   $$('[data-act]', root).forEach(b => b.addEventListener('click', () => {
     const p = Store.patient(App.activePatientId());
     const a = b.dataset.act;
+    if (a === 'new-code') { EmergencyAccess.issue(p.id); App.medicalIdExpired = null; Toast.success('New emergency code', 'The previous code no longer works.'); App.renderBody(); return; }
     if (a === 'copy-id') {
       if (navigator.clipboard) navigator.clipboard.writeText(p.medvaultId);
       Toast.success('Copied', 'MedVault ID ' + p.medvaultId + ' copied.');
@@ -697,9 +726,10 @@ function openRecordView(recordId) {
   const ex = r.extracted || {};
   const field = (k, v) => v ? '<div style="margin-bottom:14px"><div class="section-title" style="margin:0 0 6px">' + esc(k) + '</div><div style="font-size:14px;line-height:1.55">' + v + '</div></div>' : '';
 
+  const canMeds = r.type === 'prescription' && (ex.medications || []).length && canEditMedicineList(r.patientId);
   Fullscreen.open({
     title: r.title,
-    actions: '<button class="app-header__btn" data-dl aria-label="Download">' + icon('download', 19) + '</button>',
+    actions: '<button class="app-header__btn" data-dl aria-label="Download original file">' + icon('download', 19) + '</button>',
     body: '<div class="row" style="gap:8px;margin-bottom:16px;flex-wrap:wrap">' +
         '<span class="badge badge--indigo">' + esc(t.label) + '</span>' +
         (r.source === 'provider-upload' ? '<span class="badge badge--teal">Provider-linked</span>' : '<span class="badge badge--gray">Patient upload</span>') +
@@ -709,13 +739,17 @@ function openRecordView(recordId) {
         '<div><dt>Facility</dt><dd>' + esc(r.facilityName) + '</dd></div>' +
         '<div><dt>Clinician</dt><dd>' + esc(r.doctor || '—') + '</dd></div>' +
         '<div><dt>Document</dt><dd class="mono" style="font-size:12.5px">' + esc(r.fileName) + '</dd></div>' +
+        '<div><dt>Original file</dt><dd>' + (r.fileStored ? '<button class="btn btn--sm" data-open-original>' + icon('eye', 14) + ' Open original</button>' : '<span class="small muted">Not stored on this device</span>') + '</dd></div>' +
+        (r.extraction ? '<div><dt>Extraction</dt><dd class="small">' + esc(r.extraction.method === 'ocr' ? 'OCR' + (r.extraction.confidence !== null && r.extraction.confidence !== undefined ? ' · ' + r.extraction.confidence + '% confidence' : '') : r.extraction.method === 'sample' ? 'Demo sample' : 'Entered by hand') + ' · reviewed before saving</dd></div>' : '') +
         '<div><dt>Added</dt><dd>' + esc(fmtDateTime(r.createdAt)) + '</dd></div>' +
       '</dl>' +
       '<div class="divider"></div>' +
       field('Summary', esc(r.summary)) +
       field('Diagnosis', esc(ex.diagnosis)) +
       field('Medications', (ex.medications || []).length ? '<ul style="margin:0;padding-left:19px">' + ex.medications.map(m => '<li>' + esc(m) + '</li>').join('') + '</ul>' : '') +
-      field('Results / Vitals', esc(ex.results || ex.vitals)) +
+      field('Results', esc(ex.results)) +
+      field('Vital signs', esc(ex.vitals)) +
+      (canMeds ? '<button class="btn btn--block" data-med-confirm style="margin-bottom:16px">' + icon('plus', 16) + ' Add these medicines to my list</button>' : '') +
       field('Advice', esc(ex.advice)) +
       ((r.tags || []).length ? '<div>' + r.tags.map(x => '<span class="tag" style="margin-right:5px">#' + esc(x) + '</span>').join('') + '</div>' : '') +
       '<div style="display:flex;gap:10px;margin-top:22px">' +
@@ -724,12 +758,15 @@ function openRecordView(recordId) {
       '</div>'
   });
 
-  $('[data-dl]').addEventListener('click', () => Toast.info('Download started', r.fileName + ' — simulated.'));
+  $('[data-dl]').addEventListener('click', () => openOriginalFile(r, true));
+  $$('[data-open-original]').forEach(b => b.addEventListener('click', () => openOriginalFile(r, false)));
+  $$('[data-med-confirm]').forEach(b => b.addEventListener('click', () => openMedicineConfirm(r.patientId, ex.medications, r)));
   $$('[data-fs-delete]').forEach(b => b.addEventListener('click', async () => {
     const ok = await Sheet.confirm({ title: 'Delete record?', message: '"' + r.title + '" will be permanently removed.', warning: 'Deletion is logged and cannot be undone.', okLabel: 'Delete', danger: true });
     if (!ok) return;
     Store.state.records = Store.state.records.filter(x => x.id !== r.id);
     Store.save();
+    if (r.fileStored) FileStore.delete(r.id);
     audit('RECORD_DELETED', { patientId: r.patientId, detail: 'Deleted ' + r.title, severity: 'warning' });
     Fullscreen.close();
     Toast.success('Deleted', 'Record removed from timeline.');
@@ -740,17 +777,19 @@ function openRecordView(recordId) {
 function openPatientUpload() {
   const pid = App.activePatientId();
   let step = 1, ocr = null;
+  const steps = n => '<div class="steps">' + ['Select', 'Extract', 'Review'].map((s, i) =>
+    '<div class="step' + (i + 1 < n ? ' is-done' : i + 1 === n ? ' is-active' : '') + '">' + (i + 1) + ' · ' + s + '</div>').join('') + '</div>';
 
   const renderBody = () => {
     const b = $('#up-body');
     if (!b) return;
     if (step === 1) {
-      b.innerHTML = '<div class="steps"><div class="step is-active">1 · Select</div><div class="step">2 · Extract</div><div class="step">3 · Review</div></div>' +
+      b.innerHTML = steps(1) +
         '<div class="dropzone" id="up-dz">' + icon('upload', 28) +
           '<div style="font-weight:600;margin-top:11px;font-size:14.5px">Choose a file</div>' +
-          '<div class="small muted" style="margin-top:4px">PDF, JPG, PNG · 25 MB max</div>' +
-          '<input type="file" id="up-fi" style="display:none" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" /></div>' +
-        '<div class="section-title">Or try a sample</div>' +
+          '<div class="small muted" style="margin-top:4px">JPG, PNG or WebP photos are read with OCR · PDF and Word files are saved without OCR · 10 MB max</div>' +
+          '<input type="file" id="up-fi" style="display:none" accept=".jpg,.jpeg,.png,.webp,.pdf,.doc,.docx,image/*" /></div>' +
+        '<div class="section-title">Or try a sample <span class="muted" style="font-weight:500;text-transform:none;letter-spacing:0">(simulated extraction)</span></div>' +
         '<div style="display:flex;flex-direction:column;gap:9px">' +
           OCR.samples.map((s, i) => '<button class="btn" data-sample="' + i + '" style="justify-content:flex-start;text-align:left;padding:12px 14px">' +
             '<span class="record-ico record-ico--' + ((RECORD_TYPES[s.type] || {}).cls || 'prescription') + '" style="width:34px;height:34px">' + icon('file', 17) + '</span>' +
@@ -758,58 +797,54 @@ function openPatientUpload() {
         '</div>';
       const dz = $('#up-dz', b), fi = $('#up-fi', b);
       dz.addEventListener('click', () => fi.click());
-      fi.addEventListener('change', () => { if (fi.files[0]) run(fi.files[0].name, fi.files[0].size); });
-      $$('[data-sample]', b).forEach(btn => btn.addEventListener('click', () => {
-        const s = OCR.samples[+btn.dataset.sample]; run(s.fileName, s.size);
-      }));
+      fi.addEventListener('change', () => {
+        const f = fi.files[0];
+        if (!f) return;
+        if (f.size > FileStore.MAX_BYTES) { Toast.error('File too large', 'Choose a file of 10 MB or less.'); fi.value = ''; return; }
+        run({ file: f });
+      });
+      $$('[data-sample]', b).forEach(btn => btn.addEventListener('click', () => run({ sample: +btn.dataset.sample })));
     } else if (step === 2) {
-      b.innerHTML = '<div class="steps"><div class="step is-done">1 · Select</div><div class="step is-active">2 · Extract</div><div class="step">3 · Review</div></div>' +
+      b.innerHTML = steps(2) +
         '<div style="text-align:center;padding:26px 0">' +
         '<div class="spinner spinner--lg" style="margin:0 auto 18px"></div>' +
         '<div style="font-weight:600" id="up-stage">Processing…</div>' +
         '<div class="progress" style="margin-top:20px;max-width:300px;margin-left:auto;margin-right:auto"><div class="progress__bar" id="up-bar" style="width:0%"></div></div></div>';
     } else {
-      const ex = ocr.extracted;
-      b.innerHTML = '<div class="steps"><div class="step is-done">1 · Select</div><div class="step is-done">2 · Extract</div><div class="step is-active">3 · Review</div></div>' +
-        '<div class="alert alert--success" style="margin-bottom:14px">' + icon('check', 18) + '<div><strong>Extraction complete.</strong> Review the fields below.</div></div>' +
-        '<div class="field"><label for="up-title">Record title</label><input class="input" id="up-title" value="' + esc(ocr.sample.label) + '" /></div>' +
-        '<div class="field"><label for="up-type">Type</label><select class="select" id="up-type">' +
-          Object.keys(RECORD_TYPES).map(t => '<option value="' + t + '"' + (ocr.type === t ? ' selected' : '') + '>' + esc(RECORD_TYPES[t].label) + '</option>').join('') +
-        '</select></div>' +
-        '<div class="field"><label for="up-date">Date</label><input class="input" type="date" id="up-date" value="' + esc(ex.date || todayISO()) + '" /></div>' +
-        '<div class="field"><label for="up-facility">Facility</label><input class="input" id="up-facility" value="' + esc(ex.facility || '') + '" /></div>' +
-        '<div class="field"><label for="up-doctor">Clinician</label><input class="input" id="up-doctor" value="' + esc(ex.doctor || '') + '" /></div>' +
-        '<div class="field"><label for="up-diagnosis">Diagnosis</label><input class="input" id="up-diagnosis" value="' + esc(ex.diagnosis || '') + '" /></div>' +
-        '<div class="field"><label for="up-meds">Medications (one per line)</label><textarea class="textarea" id="up-meds">' + esc((ex.medications || []).join('\n')) + '</textarea></div>' +
-        '<div class="field"><label for="up-results">Results</label><input class="input" id="up-results" value="' + esc(ex.results || ex.vitals || '') + '" /></div>' +
-        '<div class="field"><label for="up-advice">Advice</label><textarea class="textarea" id="up-advice">' + esc(ex.advice || '') + '</textarea></div>' +
+      b.innerHTML = steps(3) + OCRReview.fields('up', ocr) +
         '<button class="btn btn--primary btn--block" id="up-save">' + icon('check', 17) + ' Save to record</button>';
-      $('#up-save').addEventListener('click', () => {
-        const meds = $('#up-meds').value.split('\n').map(s => s.trim()).filter(Boolean);
+      const save = $('#up-save', b);
+      OCRReview.bind('up', b, save, ocr);
+      save.addEventListener('click', async () => {
+        const v = OCRReview.read('up', b);
+        save.disabled = true;
         const rec = {
-          id: uid('r'), patientId: pid, type: $('#up-type').value,
-          title: $('#up-title').value.trim() || 'Untitled',
-          date: $('#up-date').value || todayISO(),
+          id: uid('r'), patientId: pid, type: v.type || 'consultation-note',
+          title: v.title || 'Untitled',
+          date: v.date || todayISO(),
           facilityId: null,
-          facilityName: $('#up-facility').value.trim() || 'Self-uploaded document',
-          doctor: $('#up-doctor').value.trim(), source: 'patient-upload',
+          facilityName: v.facility || 'Self-uploaded document',
+          doctor: v.doctor, source: 'patient-upload',
           fileName: ocr.fileName, size: ocr.size,
-          summary: $('#up-diagnosis').value.trim() || 'Uploaded by patient.',
-          extracted: { diagnosis: $('#up-diagnosis').value.trim(), medications: meds, results: $('#up-results').value.trim(), advice: $('#up-advice').value.trim() },
-          tags: ['patient-upload'], createdAt: nowISO()
+          summary: v.diagnosis || 'Uploaded by patient.',
+          extracted: { diagnosis: v.diagnosis, medications: v.medications, results: v.results, vitals: v.vitals, advice: v.advice },
+          extraction: { method: ocr.source === 'sample' ? 'sample' : ocr.ok ? 'ocr' : 'manual', confidence: ocr.confidence, reviewedAt: nowISO() },
+          tags: ['patient-upload'].concat(ocr.source === 'ocr' && ocr.ok ? ['ocr'] : []), createdAt: nowISO()
         };
         Store.state.records.unshift(rec); Store.save();
-        audit('RECORD_UPLOADED', { patientId: pid, detail: 'Patient uploaded "' + rec.title + '"' });
+        audit('RECORD_UPLOADED', { patientId: pid, detail: 'Patient uploaded "' + rec.title + '"' + (ocr.file ? ' with original file' : '') });
+        if (ocr.file) await attachOriginalFile(rec, ocr.file);
         Sheet.close();
         Toast.success('Saved', 'Record added to your timeline.');
         App.renderBody();
+        if (rec.type === 'prescription' && v.medications.length) openMedicineConfirm(pid, v.medications, rec);
       });
     }
   };
 
-  function run(fileName, size) {
+  function run(source) {
     step = 2; renderBody();
-    OCR.simulate(fileName, size, (p, s) => {
+    OCR.process(source, (p, s) => {
       const bar = $('#up-bar'), st = $('#up-stage');
       if (bar) bar.style.width = p + '%';
       if (st) st.textContent = s;
@@ -818,6 +853,55 @@ function openPatientUpload() {
 
   Sheet.open({ title: 'Upload a record', body: '<div id="up-body"></div>' });
   renderBody();
+}
+
+/* ---- Prescription → medicine list (explicit confirmation only) ---- */
+function medKey(s) { return String(s || '').toLowerCase().replace(/^(?:tab|tablet|cap|capsule|syp|syrup|inj)\.?\s+/, '').replace(/[^a-z0-9]+/g, ' ').trim(); }
+function medName(s) { return medKey(s).split(' ')[0] || ''; }
+
+function canEditMedicineList(pid) {
+  const role = App.role();
+  if (role === 'patient') return (App.currentUser() || {}).patientId === pid;
+  if (role === 'caregiver') return Store.caregiversFor(pid).some(l => l.userId === (App.currentUser() || {}).id && l.status === 'active' && (l.permissions || []).includes('manage-emergency'));
+  return false;
+}
+
+/* Lets the user choose which prescribed medicines to add to the profile
+   medicine list. Nothing is pre-selected and no reminder is created. */
+function openMedicineConfirm(pid, meds, record) {
+  const p = Store.patient(pid);
+  if (!p || !meds.length) return;
+  if (!canEditMedicineList(pid)) { Toast.info('Medicine list not changed', 'Only the patient or a caregiver with emergency-profile permission can update the medicine list.'); return; }
+  const current = (p.medications || []).filter(m => m && !/^none$/i.test(m.trim()));
+  const rows = meds.map((m, i) => {
+    const exact = current.find(c => medKey(c) === medKey(m));
+    const similar = !exact && current.find(c => medName(c) && medName(c) === medName(m));
+    return '<label class="check med-confirm' + (exact ? ' is-disabled' : '') + '"><input type="checkbox" data-med="' + i + '"' + (exact ? ' disabled' : '') + ' />' +
+      '<span>' + esc(m) + '<small>' + (exact ? 'Already in your medicine list' : similar ? 'Your list has: ' + esc(similar) : 'Not in your list yet') + '</small></span></label>';
+  }).join('');
+  const root = Sheet.open({
+    title: 'Add medicines to your list?',
+    body: '<p class="small muted" style="margin-bottom:14px;line-height:1.55">From <strong>' + esc(record.title) + '</strong> (' + esc(fmtDate(record.date)) + '). Tick only the medicines you are currently taking as prescribed. Check each name and dose against the prescription.</p>' +
+      '<div style="display:flex;flex-direction:column;gap:9px">' + rows + '</div>' +
+      '<div class="alert alert--info" style="margin-top:14px">' + icon('bell', 17) + '<div>MedVault does not create reminders or change doses. After adding, you can choose reminder times yourself in Reminders.</div></div>',
+    footer: '<button class="btn" data-sheet-close>Not now</button><button class="btn btn--primary" id="med-add" disabled>Add selected</button>'
+  });
+  const add = $('#med-add', root);
+  const boxes = $$('[data-med]', root);
+  boxes.forEach(b => b.addEventListener('change', () => {
+    b.closest('.check').classList.toggle('is-on', b.checked);
+    add.disabled = !boxes.some(x => x.checked);
+  }));
+  add.addEventListener('click', () => {
+    const chosen = boxes.filter(b => b.checked).map(b => meds[+b.dataset.med]);
+    if (!chosen.length) return;
+    p.medications = current.concat(chosen.filter(m => !current.some(c => medKey(c) === medKey(m))));
+    Store.save();
+    audit('MEDICATIONS_CONFIRMED', { patientId: pid, detail: 'Added ' + chosen.length + ' medicine(s) to the profile list from ' + record.title });
+    Sheet.close();
+    Toast.success('Medicine list updated', chosen.length + ' added. Set reminder times in Reminders if you want them.');
+    App.renderBody();
+  });
 }
 
 function openGrantConsent(editId) {

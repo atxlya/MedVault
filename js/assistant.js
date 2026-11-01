@@ -192,10 +192,17 @@ function getPatientMedicalContext(patientId, question) {
   return { authorized: true, patientId, role: access.role, kind, metric, lab, records: relevant, allRecords: records, profile, profileAllowed };
 }
 
+// Questions that ask for a judgement or a treatment decision. The assistant only
+// reports what records say, so these get a fixed, non-advisory reply.
+const ASSISTANT_ADVICE_RE = /\b(should i|can i (?:take|stop|skip|increase|reduce|double)|is (?:it|this|that|my \w+) (?:safe|ok|okay|normal|bad|dangerous|serious|good)|am i (?:at risk|sick|diabetic|ok|okay|healthy)|what should i do|do i need (?:to|a|an)|do i have|stop taking|change my (?:medicine|medication|dose))\b/i;
+
 function assistantAnswer(patientId, question) {
   const ctx = getPatientMedicalContext(patientId, question);
   if (!ctx.authorized) return { text: ctx.reason || 'I could not verify access to this patient record.', sources: [], denied: true };
   const q = question.toLowerCase();
+  if (ASSISTANT_ADVICE_RE.test(q) && !/\bdo i have (?:any |an? )?(?:eye|records?|allerg|prescriptions?|lab|reports?|appointments?)/i.test(q)) {
+    return { text: 'I can\u2019t give medical advice, a diagnosis or medicine instructions. I can only show what your records say \u2014 for example a value, a date or a prescription. Please ask your doctor or pharmacist about what to do.', sources: [] };
+  }
   const sources = [];
   const addSource = r => { if (r && !sources.some(x => x.id === r.id)) sources.push(r); };
   const notFound = label => `I couldn't find ${label} in the records available to this session. You may need to add a relevant record to MedVault.`;
@@ -340,10 +347,10 @@ function assistantState() {
 Screens.patient.assistant = Screens.caregiver.assistant = Screens.provider.assistant = Screens.emergency.assistant = function () {
   const { access, state } = assistantState();
   if (!access.ok) return '<div class="screen">' + emptyState('Assistant unavailable', access.reason) + '</div>';
-  const welcome = `<div class="assistant-message"><div class="assistant-bubble assistant-welcome">Hi! I'm your MedVault AI assistant.<br><br>Ask me about your medical records, prescriptions, test results, vital signs, or previous appointments.<br><br>I'll look through your available records and tell you what they show.<div class="assistant-note">Answers are based only on records available to this session.</div></div></div>`;
+  const welcome = `<div class="assistant-message"><div class="assistant-bubble assistant-welcome">Hi! I'm the MedVault record assistant.<br><br>Ask me about your medical records, prescriptions, test results, vital signs, or previous appointments.<br><br>I look through the records available to you and tell you what they show.<div class="assistant-note">Prototype: answers come from fixed pattern matching, not a language model. I don\u2019t give diagnoses, medical advice or medicine instructions.</div></div></div>`;
   const suggestions = !state.messages.length ? `<div class="assistant-suggestions">${ASSISTANT_SUGGESTIONS.map(s => `<button type="button" class="assistant-suggestion" data-assistant-suggestion="${esc(s)}">${esc(s)}</button>`).join('')}</div>` : '';
   const messages = state.messages.map(assistantRenderMessage).join('');
-  return `<div class="screen assistant-screen"><div class="assistant-intro"><div class="assistant-avatar">${icon('sparkle', 18)}</div><div><strong>MedVault AI</strong><span>Answers from your medical records</span></div></div><div class="assistant-thread" id="assistant-thread" aria-live="polite">${welcome}${messages}${suggestions}${state.loading ? '<div class="assistant-message"><div class="assistant-bubble assistant-thinking"><span class="spinner"></span><span>Checking your available records…</span></div></div>' : ''}</div><form class="assistant-composer" id="assistant-form"><input id="assistant-input" class="input" maxlength="2000" autocomplete="off" aria-label="Ask about your medical records" placeholder="Ask about your medical records…" ${state.loading ? 'disabled' : ''}><button class="btn btn--primary" type="submit" aria-label="Send question" ${state.loading ? 'disabled' : ''}>${icon('send', 18)}</button></form></div>`;
+  return `<div class="screen assistant-screen"><div class="assistant-intro"><div class="assistant-avatar">${icon('sparkle', 18)}</div><div><strong>MedVault Assistant</strong><span>Rule-based prototype · answers from your records</span></div></div><div class="assistant-thread" id="assistant-thread" aria-live="polite">${welcome}${messages}${suggestions}${state.loading ? '<div class="assistant-message"><div class="assistant-bubble assistant-thinking"><span class="spinner"></span><span>Checking your available records…</span></div></div>' : ''}</div><form class="assistant-composer" id="assistant-form"><input id="assistant-input" class="input" maxlength="2000" autocomplete="off" aria-label="Ask about your medical records" placeholder="Ask about your medical records…" ${state.loading ? 'disabled' : ''}><button class="btn btn--primary" type="submit" aria-label="Send question" ${state.loading ? 'disabled' : ''}>${icon('send', 18)}</button></form></div>`;
 };
 
 function bindAssistant(root) {
