@@ -69,6 +69,8 @@ Screens.emergency.emergency = function () {
           '</div></div>';
       }).join('') + '</div>' : '') +
 
+    '<button class="btn btn--primary btn--block" data-act="emergency-assistant" style="margin:16px 0">' + icon('sparkle', 17) + ' Ask about in-scope records</button>' +
+
     (ev ? '<div class="section-title">This access</div>' +
       '<div class="card"><div class="card__body">' +
         '<dl class="kv">' +
@@ -119,6 +121,7 @@ Screens.emergency.timeline = function () {
 Screens.emergency.bind = {
   emergency: function (root) {
     $$('[data-record]', root).forEach(el => el.addEventListener('click', () => openRecordView(el.dataset.record)));
+    $$('[data-act="emergency-assistant"]', root).forEach(b => b.addEventListener('click', () => App.go('assistant')));
   },
   profile: function (root) {
     $$('[data-act="logout"]', root).forEach(b => b.addEventListener('click', async () => {

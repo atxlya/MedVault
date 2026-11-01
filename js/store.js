@@ -4,6 +4,8 @@
 
 const LS_KEY = 'medvault.mobile.db.v1';
 const SS_KEY = 'medvault.mobile.session.v1';
+const DEMO_RX_MIGRATION = 'demo-prescription-timeline-2026-10';
+const DEMO_RX_TIMELINE_V2 = 'demo-prescription-timeline-expanded-2026-10';
 
 const Store = {
   state: null,
@@ -12,7 +14,32 @@ const Store = {
       const raw = localStorage.getItem(LS_KEY);
       if (raw) {
         const p = JSON.parse(raw);
-        if (p && p.version === 1) { this.state = p; return; }
+        if (p && p.version === 1) {
+          // Add the expanded demo timeline once, while preserving uploaded records,
+          // local edits, notifications, and all other existing store data.
+          p.records = Array.isArray(p.records) ? p.records : [];
+          p.migrations = Array.isArray(p.migrations) ? p.migrations : [];
+          const hadReminders = Array.isArray(p.reminders);
+          p.reminders = hadReminders ? p.reminders : [];
+          const demoRecords = seedDatabase().records;
+          const migrations = [
+            { id: DEMO_RX_MIGRATION, recordIds: ['r11', 'r12', 'r13'] },
+            { id: DEMO_RX_TIMELINE_V2, recordIds: Array.from({ length: 20 }, (_, i) => `r${i + 14}`) }
+          ];
+          let changed = false;
+          migrations.forEach(migration => {
+            if (p.migrations.includes(migration.id)) return;
+            const existingIds = new Set(p.records.map(record => record.id));
+            p.records.push(...demoRecords.filter(record =>
+              migration.recordIds.includes(record.id) && !existingIds.has(record.id)
+            ));
+            p.migrations.push(migration.id);
+            changed = true;
+          });
+          this.state = p;
+          if (changed || !hadReminders) this.save();
+          return;
+        }
       }
     } catch (e) {}
     this.state = seedDatabase();

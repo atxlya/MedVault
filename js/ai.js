@@ -9,7 +9,7 @@ function aiExtract(str) {
   if (!str) return out;
   const patterns = {
     hba1c:      /HbA1c\s*([\d.]+)/i,
-    fbs:        /FBS\s*([\d.]+)/i,
+    fbs:        /(?:FBS|fasting\s+blood\s+(?:sugar|glucose))\s*[:=]?\s*([\d.]+)/i,
     ldl:        /LDL\s*([\d.]+)/i,
     creatinine: /Creatinine\s*([\d.]+)/i,
     egfr:       /eGFR\s*([\d.]+)/i,
@@ -40,6 +40,13 @@ function buildAISummary(pid) {
   }
 
   const metrics = [];
+  const metricHistory = (key, label, unit) => recs.map(record => {
+    const text = [record.extracted && record.extracted.results, record.extracted && record.extracted.vitals].filter(Boolean).join(' · ');
+    const values = aiExtract(text || '');
+    const value = values[key];
+    if (value === undefined) return null;
+    return { recordId: record.id, title: record.title, date: record.date, value, label, unit };
+  }).filter(Boolean).sort((a, b) => new Date(a.date) - new Date(b.date));
   const pushMetric = (label, cur, previous, unit, evaluate) => {
     if (cur === undefined || cur === null) return;
     let trend = 'flat', trendLabel = '→ stable';
@@ -52,7 +59,8 @@ function buildAISummary(pid) {
       label: label,
       value: (typeof cur === 'number' ? cur : cur) + (unit ? ' ' + unit : ''),
       trend: trend, trendLabel: trendLabel,
-      state: evaluate ? evaluate(cur) : 'good'
+      state: evaluate ? evaluate(cur) : 'good',
+      history: metricHistory(({ 'HbA1c': 'hba1c', 'Fasting glucose': 'fbs', 'LDL cholesterol': 'ldl', 'Creatinine': 'creatinine', 'eGFR': 'egfr' })[label], label, unit)
     });
   };
 
@@ -66,7 +74,12 @@ function buildAISummary(pid) {
     metrics.push({
       label: 'Blood pressure', value: latest.bp + ' mmHg',
       trend: 'flat', trendLabel: '→ current',
-      state: sys < 130 && dia < 85 ? 'good' : sys < 140 && dia < 90 ? 'watch' : 'alert'
+      state: sys < 130 && dia < 85 ? 'good' : sys < 140 && dia < 90 ? 'watch' : 'alert',
+      history: recs.map(record => {
+        const text = record.extracted && record.extracted.vitals;
+        const bp = text && text.match(/BP\s*(\d{2,3})\s*\/\s*(\d{2,3})/i);
+        return bp ? { recordId: record.id, title: record.title, date: record.date, value: bp[1] + '/' + bp[2], label: 'Blood pressure', unit: 'mmHg' } : null;
+      }).filter(Boolean).sort((a, b) => new Date(a.date) - new Date(b.date))
     });
   }
 
@@ -209,6 +222,18 @@ function renderAICard(pid) {
     '</div>'
   ).join('');
 
+  const charts = s.metrics.filter(m => (m.history || []).length > 0).map(m => {
+    const points = m.history.slice(-8), values = points.map(p => typeof p.value === 'number' ? p.value : Number(p.value.split('/')[0]));
+    const min = Math.min(...values), max = Math.max(...values), spread = max - min || 1;
+    const coords = values.map((v, i) => ({ x: 18 + (points.length === 1 ? 0 : i * 264 / (points.length - 1)), y: 66 - ((v - min) / spread) * 48 }));
+    const polyline = coords.map(p => p.x + ',' + p.y).join(' ');
+    const dots = coords.map((p, i) => '<circle cx="' + p.x + '" cy="' + p.y + '" r="4" fill="currentColor"><title>' + esc(points[i].date) + ': ' + esc(points[i].value) + '</title></circle>').join('');
+    return '<div class="ai-chart"><div class="ai-chart__head"><strong>' + esc(m.label) + '</strong><span>' + esc(m.unit) + ' · ' + points.length + ' record' + (points.length === 1 ? '' : 's') + '</span></div>' +
+      '<svg class="ai-chart__plot" viewBox="0 0 300 82" role="img" aria-label="' + esc(m.label) + ' trend over time"><line x1="18" y1="66" x2="282" y2="66"/><polyline points="' + polyline + '"/>' + dots + '</svg>' +
+      '<div class="ai-chart__dates"><span>' + esc(fmtDate(points[0].date)) + '</span><span>' + esc(fmtDate(points[points.length - 1].date)) + '</span></div>' +
+      '<div class="ai-chart__sources">' + points.map(p => '<button type="button" class="ai-chart__source" data-ai-source="' + esc(p.recordId) + '">' + icon('records', 13) + '<span>' + esc(fmtDate(p.date)) + ' · ' + esc(p.title) + '</span><b>' + esc(p.value) + '</b></button>').join('') + '</div></div>';
+  }).join('');
+
   const sysRows = s.systems.map(sys =>
     '<div class="ai-sys">' +
       '<span class="ai-sys__dot ai-sys__dot--' + sys.state + '"></span>' +
@@ -237,7 +262,7 @@ function renderAICard(pid) {
     '</div>' +
     '<div class="ai-body">' +
       (s.metrics.length
-        ? '<div class="ai-section"><div class="ai-section-title">' + icon('activity', 12) + ' Key metrics</div>' + metricRows + '</div>'
+        ? '<div class="ai-section"><div class="ai-section-title">' + icon('activity', 12) + ' Key metrics</div>' + metricRows + '</div>' + (charts ? '<div class="ai-section"><div class="ai-section-title">' + icon('timeline', 12) + ' Trends and source records</div>' + charts + '</div>' : '')
         : '') +
       '<div class="ai-section"><div class="ai-section-title">' + icon('heart', 12) + ' Body systems</div>' + sysRows + '</div>' +
       '<div class="ai-section"><div class="ai-section-title">' + icon('alert', 12) + ' What matters</div>' +

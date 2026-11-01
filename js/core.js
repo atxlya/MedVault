@@ -133,7 +133,8 @@ const ICONS = {
   more: '<circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/>',
   briefcase: '<rect x="2" y="7" width="20" height="14" rx="2.5"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
   logoutCircle: '<circle cx="12" cy="12" r="9"/><path d="M9.5 12h7M14 9l3 3-3 3"/>',
-  sparkle: '<path d="M12 2 14 9l7 2-7 2-2 7-2-7-7-2 7-2z"/>'
+  sparkle: '<path d="M12 2 14 9l7 2-7 2-2 7-2-7-7-2 7-2z"/>',
+  send: '<path d="m22 2-7 20-4-9-9-4 20-7ZM22 2 11 13"/>'
 };
 
 function icon(name, size, cls) {

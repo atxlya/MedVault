@@ -383,6 +383,8 @@ Screens.provider.record = function () {
         '<div>Scoped access · expires ' + esc(fmtDate(c.expiresAt)) + (hidden > 0 ? ' · <strong>' + hidden + ' record(s) hidden</strong>' : '') + '</div></div>' +
     '</div></div>' +
 
+    '<button class="btn btn--primary btn--block" data-act="provider-assistant" style="margin-bottom:16px">' + icon('sparkle', 17) + ' Ask about accessible records</button>' +
+
     '<div class="section-title" style="margin-top:0">Critical information</div>' +
     '<div class="card" style="margin-bottom:16px"><div class="card__body">' +
       '<dl class="kv">' +
@@ -514,6 +516,7 @@ function bindProviderRecord(root) {
     const a = b.dataset.act;
     if (a === 'request-consent') openConsentRequest(App.activePatientId());
     if (a === 'provider-upload') openProviderUpload();
+    if (a === 'provider-assistant') App.go('assistant');
   }));
   $$('[data-record]', root).forEach(el => el.addEventListener('click', () => openRecordView(el.dataset.record)));
 }

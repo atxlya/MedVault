@@ -56,6 +56,12 @@ Screens.patient.home = function () {
 
     '<div class="section-title">Quick actions</div>' +
     '<div class="list" style="margin-bottom:0">' +
+      '<div class="list-item" data-act="go-assistant"><span class="list-item__ico" style="background:var(--indigo-50);color:var(--indigo)">' + icon('sparkle', 20) + '</span>' +
+        '<div class="list-item__body"><div class="list-item__title">Ask your medical records</div><div class="list-item__sub">Get answers from your available records</div></div>' +
+        '<span class="list-item__chev">' + icon('chevron', 18) + '</span></div>' +
+      '<div class="list-item" data-act="go-reminders"><span class="list-item__ico" style="background:var(--amber-50);color:var(--amber)">' + icon('bell', 20) + '</span>' +
+        '<div class="list-item__body"><div class="list-item__title">Health reminders</div><div class="list-item__sub">Appointments, checkups and medicines</div></div>' +
+        '<span class="list-item__chev">' + icon('chevron', 18) + '</span></div>' +
       '<div class="list-item" data-act="upload"><span class="list-item__ico" style="background:var(--indigo-50);color:var(--indigo)">' + icon('upload', 20) + '</span>' +
         '<div class="list-item__body"><div class="list-item__title">Upload a record</div><div class="list-item__sub">Add a document with OCR extraction</div></div>' +
         '<span class="list-item__chev">' + icon('chevron', 18) + '</span></div>' +
@@ -245,6 +251,9 @@ Screens.patient.profile = function () {
     '<div class="list">' +
       '<div class="list-item" data-act="go-mid"><span class="list-item__ico" style="background:var(--indigo-50);color:var(--indigo)">' + icon('id', 20) + '</span>' +
         '<div class="list-item__body"><div class="list-item__title">Medical ID card</div><div class="list-item__sub">Show or share the QR code</div></div>' +
+        '<span class="list-item__chev">' + icon('chevron', 18) + '</span></div>' +
+      '<div class="list-item" data-act="go-reminders"><span class="list-item__ico" style="background:var(--amber-50);color:var(--amber)">' + icon('bell', 20) + '</span>' +
+        '<div class="list-item__body"><div class="list-item__title">Health reminders</div><div class="list-item__sub">Manage checkups, appointments and medicines</div></div>' +
         '<span class="list-item__chev">' + icon('chevron', 18) + '</span></div>' +
       '<div class="list-item" data-act="go-emergency"><span class="list-item__ico" style="background:var(--red-50);color:var(--red)">' + icon('alert', 20) + '</span>' +
         '<div class="list-item__body"><div class="list-item__title">Emergency profile</div><div class="list-item__sub">Allergies, conditions, contacts</div></div>' +
@@ -494,10 +503,12 @@ function bindPatientHome(root) {
   $$('[data-act]', root).forEach(b => b.addEventListener('click', () => {
     const a = b.dataset.act;
     if (a === 'upload') openPatientUpload();
+    if (a === 'go-assistant') App.go('assistant');
     if (a === 'go-consents') App.go('consents');
     if (a === 'go-caregivers') App.go('caregivers');
     if (a === 'go-audit') App.go('audit');
     if (a === 'go-emergency') App.go('emergency');
+    if (a === 'go-reminders') App.go('reminders');
     if (a === 'go-mid') App.go('medical-id');
     if (a === 'go-timeline') App.go('timeline');
     if (a === 'show-qr') App.go('medical-id');
@@ -510,6 +521,7 @@ function bindPatientHome(root) {
     }
   }));
   $$('[data-record]', root).forEach(el => el.addEventListener('click', () => openRecordView(el.dataset.record)));
+  $$('[data-ai-source]', root).forEach(el => el.addEventListener('click', () => openRecordView(el.dataset.aiSource)));
   bindConsentActions(root);
 }
 
@@ -553,6 +565,7 @@ function bindShare(root) {
     if (a === 'go-consents') App.go('consents');
     if (a === 'go-caregivers') App.go('caregivers');
     if (a === 'go-audit') App.go('audit');
+    if (a === 'go-reminders') App.go('reminders');
     if (a === 'grant-consent') openGrantConsent();
   }));
   bindConsentActions(root);
@@ -595,6 +608,7 @@ function bindPatientProfile(root) {
     if (a === 'go-mid') App.go('medical-id');
     if (a === 'go-emergency') App.go('emergency');
     if (a === 'go-audit') App.go('audit');
+    if (a === 'go-reminders') App.go('reminders');
   }));
 }
 
@@ -674,6 +688,10 @@ function bindPatientList(root) {
 function openRecordView(recordId) {
   const r = Store.state.records.find(x => x.id === recordId);
   if (!r) return;
+  if (typeof assistantCanOpenRecord === 'function' && !assistantCanOpenRecord(r)) {
+    Toast.error('Record unavailable', 'This record is outside your current access permissions.');
+    return;
+  }
   const t = RECORD_TYPES[r.type] || { label: r.type, icon: 'file', cls: 'prescription' };
   audit('RECORD_VIEWED', { patientId: r.patientId, detail: 'Viewed ' + r.title });
   const ex = r.extracted || {};
@@ -701,7 +719,7 @@ function openRecordView(recordId) {
       field('Advice', esc(ex.advice)) +
       ((r.tags || []).length ? '<div>' + r.tags.map(x => '<span class="tag" style="margin-right:5px">#' + esc(x) + '</span>').join('') + '</div>' : '') +
       '<div style="display:flex;gap:10px;margin-top:22px">' +
-        '<button class="btn" data-fs-delete style="flex:1;color:var(--red);border-color:#fecaca">' + icon('trash', 16) + ' Delete</button>' +
+        ((App.role() === 'patient' || App.role() === 'caregiver') ? '<button class="btn" data-fs-delete style="flex:1;color:var(--red);border-color:#fecaca">' + icon('trash', 16) + ' Delete</button>' : '') +
         '<button class="btn btn--primary" data-fs-close style="flex:1">Close</button>' +
       '</div>'
   });

@@ -124,6 +124,7 @@ const App = {
   go(tab) {
     const role = this.role();
     const tabs = TABS[role] || TABS.patient;
+    if (tab !== 'assistant' && this.subScreen === 'assistant' && this.assistantState) this.assistantState.openLogged = false;
     if (tabs.find(t => t.id === tab)) {
       this.tab = tab;
       this.subScreen = null;
@@ -195,7 +196,9 @@ const App = {
         emergency: { title: 'Emergency Profile', back: true },
         audit: { title: 'Access Log', back: true },
         'medical-id': { title: 'Medical ID', back: true },
-        patients: { title: 'My Patients' }
+        reminders: { title: 'Reminders', back: true },
+        patients: { title: 'My Patients' },
+        assistant: { title: 'AI Assistant', back: true }
       },
       provider: {
         home: { title: 'MedVault' },
@@ -205,7 +208,8 @@ const App = {
         profile: { title: 'Profile' },
         consent: { title: 'Consent Requests', back: true },
         record: { title: 'Patient Record', back: true },
-        audit: { title: 'Activity Log', back: true }
+        audit: { title: 'Activity Log', back: true },
+        assistant: { title: 'AI Assistant', back: true }
       },
       admin: {
         home: { title: 'MedVault Admin' },
@@ -218,7 +222,8 @@ const App = {
       emergency: {
         emergency: { title: 'Emergency Record' },
         timeline: { title: 'Recent Records', back: true },
-        profile: { title: 'Session' }
+        profile: { title: 'Session' },
+        assistant: { title: 'AI Assistant', back: true }
       }
     };
     const roleMap = map[role] || map.patient;
@@ -242,12 +247,15 @@ const App = {
   goBack() {
     const role = this.role();
     const backMap = {
-      patient: { consents: 'share', caregivers: 'share', emergency: 'profile', audit: 'profile', 'medical-id': 'home', patients: 'home' },
-      provider: { assisted: 'home', consent: 'patients', record: 'patients', audit: 'profile' },
-      admin: { facilities: 'home' }
+      patient: { consents: 'share', caregivers: 'share', emergency: 'profile', audit: 'profile', 'medical-id': 'home', reminders: 'profile', patients: 'home', assistant: 'home' },
+      caregiver: { consents: 'share', caregivers: 'share', emergency: 'profile', audit: 'profile', 'medical-id': 'home', reminders: 'profile', patients: 'home', assistant: 'home' },
+      provider: { assisted: 'home', consent: 'patients', record: 'patients', audit: 'profile', assistant: 'record' },
+      admin: { facilities: 'home' },
+      emergency: { assistant: 'emergency' }
     };
     const key = this.subScreen || this.tab;
     const target = (backMap[role] || {})[key] || 'home';
+    if (key === 'assistant' && this.assistantState) this.assistantState.openLogged = false;
     this.subScreen = null;
     this.go(target);
   },
@@ -256,8 +264,8 @@ const App = {
     const pid = this.activePatientId();
     const list = Store.notificationsFor(pid);
     const body = list.length ? list.map(n => {
-      const ic = n.type === 'emergency' ? 'alert' : n.type === 'consent' ? 'shield' : n.type === 'access' ? 'eye' : 'records';
-      const col = n.type === 'emergency' ? 'background:var(--red-50);color:#b91c1c' : n.type === 'consent' ? 'background:var(--amber-50);color:#b45309' : '';
+      const ic = n.type === 'emergency' ? 'alert' : n.type === 'consent' ? 'shield' : n.type === 'access' ? 'eye' : n.type === 'reminder' ? 'bell' : 'records';
+      const col = n.type === 'emergency' ? 'background:var(--red-50);color:#b91c1c' : n.type === 'consent' || n.type === 'reminder' ? 'background:var(--amber-50);color:var(--amber)' : '';
       return '<div class="list-item" data-notif="' + esc(n.id) + '" style="' + (n.read ? '' : 'background:#f7f8ff') + '">' +
         '<span class="list-item__ico" style="' + col + '">' + icon(ic, 18) + '</span>' +
         '<div class="list-item__body"><div class="list-item__title">' + esc(n.title) + '</div>' +
@@ -278,6 +286,7 @@ const App = {
       if (n && n.type === 'record') this.go('timeline');
       else if (n && n.type === 'consent') this.go('share');
       else if (n && n.type === 'emergency') this.go('profile');
+      else if (n && n.type === 'reminder') this.go('reminders');
       this.renderHeader();
     }));
     const ma = $('[data-mark-all]');
@@ -291,11 +300,18 @@ const App = {
   openAccountMenu() {
     const a = this.actor();
     const role = this.role();
+    const dark = document.documentElement.dataset.theme === 'dark';
     const body = '<div style="padding:6px 0 16px;display:flex;gap:13px;align-items:center">' +
       '<div class="avatar avatar--lg">' + esc(initials(a.name)) + '</div>' +
       '<div style="flex:1;min-width:0"><div style="font-weight:700;font-size:15px">' + esc(a.name) + '</div>' +
       '<div class="small muted">' + esc(roleLabel(role)) + (Session.data.breakGlass ? '' : ' · ' + esc((this.currentUser() || {}).email || '')) + '</div></div>' +
     '</div>' +
+    '<button type="button" class="theme-choice" data-theme-toggle aria-pressed="' + dark + '">' +
+      '<span class="theme-choice__icon" aria-hidden="true">' + (dark ? '☾' : '☼') + '</span>' +
+      '<span class="theme-choice__copy"><strong>Appearance</strong><small>' + (dark ? 'Midnight Glass' : 'Light Mode') + '</small></span>' +
+      '<span class="theme-switch' + (dark ? ' is-on' : '') + '" aria-hidden="true"><i></i></span>' +
+    '</button>' +
+    '<div style="height:14px"></div>' +
     '<div class="list" style="margin-bottom:14px">' +
       '<div class="list-item" data-menu="reset"><span class="list-item__ico" style="background:#f1f3f8;color:var(--muted)">' + icon('refresh', 18) + '</span>' +
       '<div class="list-item__body"><div class="list-item__title">Reset demo data</div><div class="list-item__sub">Restore the seeded prototype state</div></div></div>' +
@@ -303,6 +319,17 @@ const App = {
     '<button class="btn btn--danger btn--block" data-menu="logout">' + icon('logout', 18) + ' Sign out</button>';
 
     Sheet.open({ title: 'Account', body: body, footer: '' });
+
+    const themeToggle = $('[data-theme-toggle]');
+    if (themeToggle) themeToggle.addEventListener('click', () => {
+      const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+      document.documentElement.dataset.theme = next;
+      const themeColor = $('meta[name="theme-color"]');
+      if (themeColor) themeColor.content = next === 'dark' ? '#080c17' : '#f3f6fb';
+      try { localStorage.setItem('medvault-theme', next); } catch (_) {}
+      Sheet.close();
+      this.openAccountMenu();
+    });
 
     $$('[data-menu="logout"]').forEach(b => b.addEventListener('click', () => { Sheet.close(); this.logout(); }));
     $$('[data-menu="reset"]').forEach(b => b.addEventListener('click', async () => {
@@ -347,6 +374,7 @@ const App = {
     Store.load();
     if (Session.restore()) this.render();
     else this.renderAuth();
+    if (typeof ReminderEngine !== 'undefined') ReminderEngine.start();
   }
 };
 
